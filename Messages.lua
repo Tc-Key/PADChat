@@ -2,7 +2,8 @@
 -- the editor window (the "PADEdit" macro or minimap button); this table seeds it on first run
 -- and on "Reset to defaults".
 --
--- Each level is keyed by the button that picks it: A, X or Y (B is always Cancel).
+-- Each level is keyed by the button that picks it: A, X or Y (B is always Cancel),
+-- or C-K for those three with LT, RT or both triggers held (see SLOTS in PADChat.lua).
 -- A node with `text` is a message and sends immediately; a node without it is a
 -- category that opens the next level, up to four presses deep, so "X then Y
 -- then A" works the same as Tribes 2's "V G Y".
@@ -24,6 +25,11 @@ ns.DefaultMenu = {
 		A = { label = "Yes",     text = "Yes!" },
 		X = { label = "No",      text = "No." },
 		Y = { label = "Thanks",  text = "Thanks!" },
+		-- LT is the polite or positive version of a button (C D E = LT+A X Y) and
+		-- RT is the "not right now" version (F G H = RT+A X Y). LT+RT is left to players.
+		F = { label = "One moment",     text = "One moment, please." },
+		G = { label = "I cannot",       text = "I cannot right now." },
+		H = { label = "Sorry",          text = "Sorry!" },
 	},
 	X = { label = "Social",
 		A = { label = "Greet",
@@ -34,17 +40,26 @@ ns.DefaultMenu = {
 				variants = { WHISPER = { label = "Goodbye", text = "Farewell" } } },
 			Y = { label = "Wave",    emote = "WAVE",
 				variants = { WHISPER = { label = "Thanks for the group", text = "Thanks for the group!" } } },
+			D = { label = "Have a good one",  text = "Have a good one!" },
+			G = { label = "Gotta go",         text = "Gotta go, sorry!" },
 		},
 		X = { label = "Group",
 			A = { label = "Invite please!",  text = "Invite please!" },
 			X = { label = "Want to group?",  text = "Want to group up?" },
 			Y = { label = "Inviting you",    text = "Inviting you now!" },
+			D = { label = "Not grouping",       text = "No thanks, not grouping right now." },
+			E = { label = "Of course",      text = "Of course!" },
+			G = { label = "Group is full",      text = "Group is full, sorry." },
+			H = { label = "Can't invite",       text = "Can't invite right now." },
 		},
 	},
 	Y = { label = "Callout",
 		A = { label = "Help!",      text = "Help!" },
 		X = { label = "Incoming!",  text = "Incoming!" },
 		Y = { label = "Follow me",  text = "Follow me!" },
+		C = { label = "On my way",        text = "On my way!" },
+		F = { label = "Can't reach you",  text = "Can't reach you!" },
+		H = { label = "Wait here",        text = "Wait here." },
 	},
 }
 
@@ -59,6 +74,10 @@ ns.DefaultMenu.X.variants = {
 			A = { label = "Ready", text = "Ready when you are." },
 			X = { label = "Buffs please", text = "Buffs please!" },
 			Y = { label = "Drinking", text = "Drinking, please wait." },
+			C = { label = "Good to go",    text = "Good to go!" },
+			E = { label = "Back",          text = "Back." },
+			F = { label = "Not ready yet", text = "Not ready yet." },
+			H = { label = "AFK",           text = "AFK, one minute." },
 		},
 	},
 	RAID = { label = "Objectives",
@@ -79,6 +98,8 @@ ns.DefaultMenu.Y.variants = {
 		Y = { label = "Need mana", text = "Need mana.", emote = "OOM" },
 	},
 }
+-- The Group tab's Coordination mirrors Callout, trigger slots included.
+for _, key in ipairs({ "C", "D", "E", "F", "G", "H" }) do ns.DefaultMenu.Y.variants.GROUP[key] = ns.DefaultMenu.Y[key] end
 ns.DefaultMenu.A.variants = {
 	RAID = { label = "Incoming",
 		A = { label = "2-3 inc {location}", text = "2-3 inc {location}" },
