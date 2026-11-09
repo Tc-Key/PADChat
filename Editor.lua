@@ -52,7 +52,7 @@ local function Breadcrumb(path)
 	for i = 1, #path do parts[#parts + 1] = ns.NodeLabel(At(path:sub(1, i))) end
 	return table.concat(parts, " / ")
 end
-local function Sequence(path) return (path:gsub(".", "%0 > ")):gsub(" > $", "") end
+local function Sequence(path) return (path:gsub(".", function(key) return ns.KEY_LABEL[key] .. " > " end)):gsub(" > $", "") end
 local function Remember(field)
 	if field and typingField == field then return end
 	history[#history + 1] = { menu = ns.CopyMenu(ns.GetMenu()), selected = selected, expanded = ns.CopyMenu(expanded), context = context }
@@ -545,7 +545,7 @@ local function DrawTree()
 		row.expand:SetShown(IsGroup(node)); row.expand.label:SetText(expanded[path] and "v" or ">")
 		for key, badge in pairs(row.badges) do badge:SetShown(key == path:sub(-1)); badge:SetAlpha(node and 1 or 0.4) end
 		row.label:SetWidth(row:GetWidth() - 104)
-		row.label:SetText(node and ns.NodeLabel(node) or "+ Add option")
+		row.label:SetText(ns.KEY_PREFIX[path:sub(-1)] .. (node and ns.NodeLabel(node) or "+ Add option"))
 		row.label:SetTextColor(path == selected and 0.89 or (node and 0.94 or 0.6), path == selected and 0.77 or (node and 0.92 or 0.6), path == selected and 0.48 or (node and 0.89 or 0.6))
 		local _, owned = At(path)
 		row.kind:SetText(context ~= "DEFAULT" and owned and "Custom" or (IsGroup(node) and "Group" or ""))
@@ -574,7 +574,7 @@ Refresh = function(textOnly)
 	inherit:SetEnabled(context ~= "DEFAULT" and raw and raw.variants and raw.variants[context] ~= nil or false)
 	mappingHint:SetText(context == "DEFAULT" and "Say tab · other tabs inherit these options" or (owned and "Custom tab · editing this branch" or "Inherited · customize to make changes"))
 	DrawTree(); undo:SetEnabled(#history > 0)
-	formTitle:SetText("|c" .. ns.KEY_COLOR[selected:sub(-1)] .. selected:sub(-1) .. "|r  " .. (node and ns.NodeLabel(node) or "Add an option"))
+	formTitle:SetText("|c" .. ns.KEY_COLOR[selected:sub(-1)] .. ns.KEY_LABEL[selected:sub(-1)] .. "|r  " .. (node and ns.NodeLabel(node) or "Add an option"))
 	-- Keep long labels in their field; avoid a heading growing into the controls.
 	formTitle:SetWordWrap(false)
 	formPath:SetText(Breadcrumb(selected:sub(1, -2)))

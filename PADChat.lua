@@ -1,8 +1,8 @@
 -- PAD Chat: Tribes 2 Voice Game System style quick chat for WoW Forever gamepads.
 --
 -- The player presses the "PADChat" macro (placed anywhere on their bars). Its
--- /click hits a SecureHandler button whose snippet takes over A/X/Y/B/LB/RB with
--- priority override bindings, walks the menu one press at a time, and releases
+-- /click hits a SecureHandler button whose snippet takes over A/X/Y/B/LB/RB/LT/RT
+-- with priority override bindings, walks the menu one press at a time, and releases
 -- the buttons again when a message is chosen or B cancels. Binding changes have
 -- to happen in a secure snippet to work in combat.
 --
@@ -24,10 +24,26 @@ local MACRO_BODY = "/click PADChatOpen LeftButton 1"
 
 -- Xbox naming; the PAD codes are the same on every controller.
 local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4", LB = "PADLSHOULDER", RB = "PADRSHOULDER",
-	UP = "PADDUP", DOWN = "PADDDOWN" }
-local CHOICES = { "A", "X", "Y" }
-local KEY_COLOR = { A = "ff60d060", X = "ff4aa3ff", Y = "ffffd100", B = "ffff5050" }
+	LT = "PADLTRIGGER", RT = "PADRTRIGGER", UP = "PADDUP", DOWN = "PADDDOWN" }
+local FACE_COLOR = { A = "ff60d060", X = "ff4aa3ff", Y = "ffffd100" }
 local PRESSED_KEY_COLOR = "ff9d9d9d"
+
+-- Every slot is one character so a path stays one character per press: A X Y,
+-- then the same three with LT (C D E), RT (F G H) and both triggers (I J K).
+-- These IDs are saved in menus, and the secure snippet picks a slot by its
+-- position here, so the order can't change. Uppercase only: attribute names
+-- are case-insensitive.
+local SLOTS = "AXYCDEFGHIJK"
+local TRIGGERS = { "", "LT+", "RT+", "LT+RT+" }
+local CHOICES, KEY_LABEL, KEY_PREFIX, PATH_LABEL, KEY_COLOR = {}, {}, {}, {}, { B = "ffff5050" }
+for i = 1, #SLOTS do
+	local faceIndex = (i - 1) % 3 + 1
+	local slot, face = SLOTS:sub(i, i), SLOTS:sub(faceIndex, faceIndex)
+	local trigger = TRIGGERS[math.ceil(i / 3)]
+	CHOICES[i], KEY_COLOR[slot], KEY_LABEL[slot] = slot, FACE_COLOR[face], trigger .. face
+	KEY_PREFIX[slot] = trigger == "" and "" or trigger .. " "
+	PATH_LABEL[slot] = trigger == "" and face or "(" .. trigger .. face .. ")"
+end
 
 -- Paints a button path. The first `pressedCount` keys are the ones already
 -- pressed, so they grey out and the remaining presses keep their colour.
@@ -35,14 +51,16 @@ local function FormatPath(path, pressedCount)
 	local colored = {}
 	for i = 1, #path do
 		local key = path:sub(i, i)
-		colored[i] = "|c" .. (i <= pressedCount and PRESSED_KEY_COLOR or KEY_COLOR[key]) .. key .. "|r"
+		colored[i] = "|c" .. (i <= pressedCount and PRESSED_KEY_COLOR or KEY_COLOR[key]) .. PATH_LABEL[key] .. "|r"
 	end
 	return table.concat(colored)
 end
 
+local function PathText(path) return (path:gsub(".", PATH_LABEL)) end
+
 local function Print(text) print("|cff33ff99PAD Chat|r: " .. text) end
 
-ns.CHOICES, ns.KEY_COLOR, ns.Print = CHOICES, KEY_COLOR, Print
+ns.CHOICES, ns.KEY_COLOR, ns.KEY_LABEL, ns.KEY_PREFIX, ns.Print = CHOICES, KEY_COLOR, KEY_LABEL, KEY_PREFIX, Print
 -- Battlegrounds aren't in the WoW: Forever beta, so the Battleground tab and
 -- zone detection stay off until launch. Flip to true to re-enable them all.
 ns.BATTLEGROUNDS_ENABLED = ns.BATTLEGROUNDS_ENABLED or false
@@ -192,11 +210,12 @@ function ns.UpgradeDefaults(menu, includeMissing)
 	local function Matches(node, default)
 		if not node or not default then return node == default end
 		if node.empty or node.label ~= default.label or node.text ~= default.text or node.emote ~= default.emote then return false end
-		for _, key in ipairs(CHOICES) do if not Matches(node[key], default[key]) then return false end end
+		-- Saves this old predate trigger slots, so only the face buttons can differ.
+		for _, key in ipairs(CHOICES) do if KEY_PREFIX[key] == "" and not Matches(node[key], default[key]) then return false end end
 		return true
 	end
-	for _, key in ipairs(CHOICES) do
-		local node, default = menu[key], ns.DefaultMenu[key]
+	for key, default in pairs(ns.DefaultMenu) do
+		local node = menu[key]
 		if Matches(node, default) and default.variants then
 			node.variants = node.variants or {}
 			for context, variant in pairs(default.variants) do
@@ -244,11 +263,74 @@ end
 
 -- The LFG tab is new, so every saved menu takes its shipped options.
 function ns.UpgradeLFG(menu)
-	for _, key in ipairs(CHOICES) do
+	for key, default in pairs(ns.DefaultMenu) do
 		menu[key] = menu[key] or { empty = true }
 		local node = menu[key]
 		node.variants = node.variants or {}
-		if node.variants.LFG == nil then node.variants.LFG = DeepCopy(ns.DefaultMenu[key].variants.LFG) end
+		if node.variants.LFG == nil then node.variants.LFG = DeepCopy(default.variants.LFG) end
+	end
+end
+
+-- The save file only holds what the player changed; Messages.lua supplies the
+-- rest. In play ns.DB.menu is always the complete menu, where a missing slot
+-- was removed and a missing variant inherits. On disk (version 9+) a missing
+-- entry means "use the default", so removals are written as { empty = true }.
+-- ExpandEntry and CompactEntry convert between the two on load and logout.
+local OVERRIDES = { "variants", "battlegrounds" }
+
+local function WalkDefaults(node, default, visit)
+	if ns.IsMessage(node) ~= ns.IsMessage(default) then return end -- the player changed its kind
+	if not node.empty then
+		for _, key in ipairs(CHOICES) do
+			if default[key] then visit(node, key, default[key]) end
+		end
+	end
+	for _, field in ipairs(OVERRIDES) do
+		for key, stock in pairs(default[field] or {}) do
+			node[field] = node[field] or {}
+			visit(node[field], key, stock)
+		end
+		if node[field] and not next(node[field]) then node[field] = nil end
+	end
+end
+
+-- Children and variants left on the node count as edits; "chat" is a legacy field.
+local function IsUnedited(node, default)
+	for field, value in pairs(node) do
+		if field ~= "chat" and ((field ~= "label" and field ~= "text" and field ~= "emote") or value ~= default[field]) then
+			return false
+		end
+	end
+	return node.label == default.label and node.text == default.text and node.emote == default.emote
+end
+
+local function ExpandEntry(holder, key, default)
+	local saved = holder[key]
+	if saved == nil then holder[key] = DeepCopy(default)
+	elseif type(saved) == "table" then
+		if saved.empty and not saved.variants then holder[key] = nil
+		else WalkDefaults(saved, default, ExpandEntry) end
+	end
+end
+
+local function CompactEntry(holder, key, default)
+	local saved = holder[key]
+	if saved == nil then holder[key] = { empty = true }
+	elseif type(saved) == "table" then
+		WalkDefaults(saved, default, CompactEntry)
+		if IsUnedited(saved, default) then holder[key] = nil end
+	end
+end
+
+-- Saves from before version 9 are complete menus, so they only need the trigger
+-- slots added.
+local function IsTriggerSlot(key) return KEY_PREFIX[key] ~= nil and KEY_PREFIX[key] ~= "" end
+
+local function FillTriggerEntry(holder, key, default)
+	if holder[key] == nil then
+		if IsTriggerSlot(key) then holder[key] = DeepCopy(default) end
+	elseif type(holder[key]) == "table" then
+		WalkDefaults(holder[key], default, FillTriggerEntry)
 	end
 end
 
@@ -275,9 +357,19 @@ local open = CreateFrame("Button", "PADChatOpen", UIParent, "SecureHandlerClickT
 open:RegisterForClicks("AnyDown")
 for key, binding in pairs(KEYS) do open:SetAttribute("key-" .. key, binding) end
 open:SetAttribute("battlegrounds", ns.BATTLEGROUNDS_ENABLED)
+open:SetAttribute("slots", SLOTS)
+
+-- Each trigger needs its own button: one button registered for releases loses
+-- them when several keys are held at once, leaving a trigger stuck "held".
+for _, trigger in ipairs({ "LT", "RT" }) do
+	local button = CreateFrame("Button", "PADChat" .. trigger, open, "SecureHandlerClickTemplate")
+	button:RegisterForClicks("AnyDown", "AnyUp")
+	button:SetAttribute("_onclick", [[ self:GetParent():SetAttribute("held" .. button, down and 1 or nil) ]])
+end
 
 -- LeftButton = the macro (toggle); A/X/Y/B/LB/RB/UP/DOWN = override-bound pad
 -- buttons, which click this same button with the letter as the mouse button.
+-- LT/RT click their own buttons above, and A/X/Y become a slot from SLOTS.
 -- WHISPER / LFG = Y in an integrated Blizzard window (Integrations.lua), which
 -- opens straight onto the Whisper or LFG tab with that window's player picked.
 -- The LFG tab only joins the LB/RB cycle of a menu it opened.
@@ -298,10 +390,15 @@ open:SetAttribute("_onclick", [[
 			self:SetAttribute("lfgopen", button == "LFG" and 1 or nil)
 			self:SetAttribute("path", "")
 			self:SetAttribute("whisperindex", 0)
+			self:SetAttribute("heldLT", nil)
+			self:SetAttribute("heldRT", nil)
 			for modifier in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
 				local prefix = modifier == "NONE" and "" or modifier
 				for key in (button ~= "LeftButton" and "A X Y B LB RB UP DOWN" or "A X Y B LB RB"):gmatch("%S+") do
 					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChatOpen", key)
+				end
+				for key in ("LT RT"):gmatch("%S+") do
+					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChat" .. key, key)
 				end
 			end
 		end
@@ -353,7 +450,9 @@ open:SetAttribute("_onclick", [[
 		return
 	end
 
-	local path = (self:GetAttribute("path") or "") .. button
+	local slot = (self:GetAttribute("heldLT") and 3 or 0) + (self:GetAttribute("heldRT") and 6 or 0)
+		+ (button == "A" and 1 or button == "X" and 2 or 3)
+	local path = (self:GetAttribute("path") or "") .. self:GetAttribute("slots"):sub(slot, slot)
 	local context = self:GetAttribute("menucontext") or "DEFAULT"
 	local shape = context == "RAID" and self:GetAttribute("menuprofile") == "WSG" and "WSG" or context
 	local kind = self:GetAttribute("node-" .. shape .. "-" .. path)
@@ -552,7 +651,7 @@ function ns.MakeBadge(parent, key, size)
 	local letter = parent:CreateFontString(nil, "OVERLAY", size >= 40 and "GameFontNormalHuge" or "GameFontHighlight")
 	letter:SetPoint("CENTER", badge, "CENTER", 0, 0)
 	letter:SetTextColor(0.05, 0.05, 0.05)
-	letter:SetText(key)
+	letter:SetText((KEY_LABEL[key] or key):sub(-1))
 	return badge
 end
 
@@ -667,7 +766,7 @@ function ns.CreateMenuView(parent, name)
 		end
 		sequence:SetPoint("TOPLEFT", 14, -62)
 		sequence:SetShown(path ~= "")
-		sequence:SetText(path .. "  -  " .. heading)
+		sequence:SetText(PathText(path) .. "  -  " .. heading)
 		local y = 64 + (path ~= "" and 18 or 0)
 		headerLine:SetPoint("TOPLEFT", 14, -y)
 		y = y + 5
@@ -679,15 +778,18 @@ function ns.CreateMenuView(parent, name)
 			for _, key in ipairs(CHOICES) do
 				local child = node[key]
 				local row = rows[key]
-				row.label:SetText(child and ns.FormatMessage(ns.NodeLabel(child), context) or "—")
-				local available = ns.IsAvailable(child, context)
-				row.label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
-				row.badge:SetAlpha(available and 1 or 0.35)
-				row.arrow:SetShown(child ~= nil and not ns.IsMessage(child))
-				local height = math.max(30, row.label:GetStringHeight() + 12)
-				row:SetHeight(height)
-				row:SetPoint("TOPLEFT", 14, -y)
-				y = y + height
+				row:SetShown(child ~= nil or KEY_PREFIX[key] == "")
+				if row:IsShown() then
+					row.label:SetText(KEY_PREFIX[key] .. (child and ns.FormatMessage(ns.NodeLabel(child), context) or "—"))
+					local available = ns.IsAvailable(child, context)
+					row.label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
+					row.badge:SetAlpha(available and 1 or 0.35)
+					row.arrow:SetShown(child ~= nil and not ns.IsMessage(child))
+					local height = math.max(30, row.label:GetStringHeight() + 12)
+					row:SetHeight(height)
+					row:SetPoint("TOPLEFT", 14, -y)
+					y = y + height
+				end
 			end
 		else
 			local count, height = 0, 0
@@ -705,7 +807,7 @@ function ns.CreateMenuView(parent, name)
 								leaves[count] = label
 							end
 							local available = ns.IsAvailable(child, context)
-							local buttons = available and FormatPath(childPath, #path) or childPath
+							local buttons = available and FormatPath(childPath, #path) or PathText(childPath)
 							label:SetText(buttons .. " - " .. ns.FormatMessage(ns.NodeLabel(child), context))
 							label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
 							label:SetPoint("TOPLEFT", 0, -height - 4); label:Show()
@@ -880,6 +982,7 @@ end
 local macrosLoaded, macroReady = false, false
 local events = CreateFrame("Frame")
 events:RegisterEvent("ADDON_LOADED")
+events:RegisterEvent("PLAYER_LOGOUT")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("UPDATE_MACROS")
@@ -904,8 +1007,16 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if version < 5 then ns.UpgradeGreetings(ns.DB.menu) end
 		if version < 7 then ns.UpgradeWhisper(ns.DB.menu) end
 		if version < 8 then ns.UpgradeLFG(ns.DB.menu) end
+		if version < 9 then
+			WalkDefaults(ns.DB.menu, ns.DefaultMenu, FillTriggerEntry)
+		else
+			WalkDefaults(ns.DB.menu, ns.DefaultMenu, ExpandEntry)
+		end
 		ns.MigrateMenu(ns.DB.menu)
-		ns.DB.version = 8
+		ns.DB.version = 9
+	elseif event == "PLAYER_LOGOUT" then
+		WalkDefaults(ns.DB.menu, ns.DefaultMenu, CompactEntry)
+		return
 	end
 	UpdateContextDriver()
 	PublishMenu()

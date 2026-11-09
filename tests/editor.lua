@@ -89,7 +89,7 @@ function methods:ClearFocus() if self.scripts.OnEditFocusLost then self.scripts.
 function methods:ClearBindings() self.bound, self.bindings = false, {} end
 function methods:ClearBinding(key) assert(secure); if self.bindings then self.bindings[key] = nil end end
 function methods:SetBindingClick(priority, key, target, button)
-	assert(secure and priority and target == "PADChatOpen")
+	assert(secure and priority and target:find("^PADChat"))
 	self.bindings = self.bindings or {}; self.bindings[key] = button; self.bound = true
 end
 function CreateFrame(...) return Object(...) end
@@ -147,7 +147,14 @@ assert(loadfile("Integrations.lua"))("PADChat", ns)
 local shippedDefaults = ns.CopyMenu(ns.DefaultMenu)
 -- Exercise the existing editor and inheritance against a pre-upgrade menu;
 -- the new shipped defaults and upgrade are checked separately below.
-for _, key in ipairs(ns.CHOICES) do ns.DefaultMenu[key].variants = { LFG = ns.DefaultMenu[key].variants.LFG } end
+local function StripPresets(node)
+	for key, prefix in pairs(ns.KEY_PREFIX) do
+		if prefix ~= "" then node[key] = nil elseif node[key] then StripPresets(node[key]) end
+	end
+	for _, variant in pairs(node.variants or {}) do if variant then StripPresets(variant) end end
+end
+for _, node in pairs(ns.DefaultMenu) do node.variants = { LFG = node.variants.LFG } end
+StripPresets(ns.DefaultMenu)
 for _, frame in ipairs(objects) do
 	if frame.events.ADDON_LOADED then frame.scripts.OnEvent(frame, "ADDON_LOADED", "PADChat") end
 end
@@ -182,18 +189,25 @@ local function Move(from, to)
 	for key in to:gmatch(".") do node = node and node[key] end
 	Click(Button(node and "Swap options" or "Move option"))
 end
-local function Pad(button)
-	for _, fn in ipairs(PADChatOpen.hooks.PreClick or {}) do fn(PADChatOpen, button) end
+local function RunSnippet(frame, button, down)
 	secure = true
-	local env = { self = PADChatOpen, button = button }
-	local snippet = PADChatOpen.attributes._onclick
+	local env = { self = frame, button = button, down = down }
+	local snippet = frame.attributes._onclick
 	local chunk = loadstring and setfenv(assert(loadstring(snippet, "secure click")), env)
 		or assert(load(snippet, "secure click", "t", env))
 	chunk()
 	secure = false
+end
+local function Pad(button)
+	for _, fn in ipairs(PADChatOpen.hooks.PreClick or {}) do fn(PADChatOpen, button) end
+	RunSnippet(PADChatOpen, button, true)
 	for _, fn in ipairs(PADChatOpen.hooks.OnClick) do fn(PADChatOpen) end
 end
+local loggedOut = false
 local function Event(event, ...)
+	-- A reload of the same save logs out first, as the client does.
+	if event == "ADDON_LOADED" and ... == "PADChat" and not loggedOut and ns.DB and PADChatDB == ns.DB and ns.DB.version == 9 then Event("PLAYER_LOGOUT") end
+	if event == "PLAYER_LOGOUT" then loggedOut = true elseif event == "ADDON_LOADED" then loggedOut = false end
 	for _, frame in ipairs(objects) do if frame.events[event] and frame.scripts.OnEvent then frame.scripts.OnEvent(frame, event, ...) end end
 end
 local function Group(home, instance, kind)
@@ -631,7 +645,7 @@ Undo()
 local function FullTree(depth)
 	if depth == 0 then return { text = "Test", label = "Test" } end
 	local node = {}
-	for _, key in ipairs(ns.CHOICES) do node[key] = FullTree(depth - 1) end
+	for _, key in ipairs({ "A", "X", "Y" }) do node[key] = FullTree(depth - 1) end
 	return node
 end
 local view = ns.CreateMenuView(UIParent)
@@ -650,7 +664,7 @@ view:Hide()
 ns.DefaultMenu = shippedDefaults
 PADChatDB = nil; Event("ADDON_LOADED", "PADChat")
 ns.MenuChanged()
-assert(ns.DB.version == 8 and ns.savedLoaded == false)
+assert(ns.DB.version == 9 and ns.savedLoaded == false)
 assert(ns.ResolveNode(ns.GetMenu(), "GROUP").X.A.A.emote == "OOM")
 Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("X"); Pad("A")
@@ -664,7 +678,7 @@ assert(sent[1] == "Wait up!" and #emotes == voiceCount)
 -- with no channel. Goodbye says its line and waves.
 Group()
 Pad("LeftButton"); Pad("X"); Pad("A")
-assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave,XA(LT+X) - Have a good one,XA(RT+X) - Gotta go")
 local previousSend = sent
 Pad("Y")
 assert(#emotes == voiceCount + 1 and emotes[#emotes] == "WAVE" and sent == previousSend)
@@ -722,11 +736,11 @@ SendChatMessage = originalSend
 -- Upgrades keep custom options and explicit disabled slots; stock branches
 -- gain the new defaults once without sharing the shipped tables.
 local legacyMenu = ns.CopyMenu(shippedDefaults)
-for _, key in ipairs(ns.CHOICES) do legacyMenu[key].variants = nil end
+for key in pairs(ns.DefaultMenu) do legacyMenu[key].variants = nil end
 legacyMenu.X.variants = { GROUP = { label = "My group", A = { label = "Custom", text = "Custom!" } }, RAID = false }
 legacyMenu.Y.A.text = "My help"
 PADChatDB = { menu = legacyMenu, compact = true, version = 2 }; Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 8 and ns.DB.compact)
+assert(ns.DB.version == 9 and ns.DB.compact)
 assert(ns.DB.menu.X.variants.GROUP.A.text == "Custom!" and ns.DB.menu.X.variants.RAID == false)
 assert(ns.DB.menu.Y.A.text == "My help" and ns.DB.menu.Y.variants.GROUP == nil and ns.DB.menu.Y.variants.RAID == nil)
 assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
@@ -741,7 +755,7 @@ oldGreet.X.A.A = { label = "Hello", text = "Well met!", chat = "SAY" }
 oldGreet.X.A.X = { label = "Goodbye", text = "See ya!", chat = "SAY" }
 oldGreet.X.A.Y = { label = "Wave", text = "waves.", chat = "SAY" }
 PADChatDB = { menu = oldGreet, compact = false, version = 4 }; Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 8 and ns.DB.menu.X.A.A.text == "Hello" and ns.DB.menu.X.A.X.text == "See ya!")
+assert(ns.DB.version == 9 and ns.DB.menu.X.A.A.text == "Hello" and ns.DB.menu.X.A.X.text == "See ya!")
 assert(ns.DB.menu.X.A.Y.text == nil and ns.DB.menu.X.A.Y.emote == "WAVE" and ns.DB.menu.X.A.Y ~= shippedDefaults.X.A.Y)
 
 -- Wave can't reach a whisper target, so the Whisper tab swaps it for a thank
@@ -749,7 +763,7 @@ assert(ns.DB.menu.X.A.Y.text == nil and ns.DB.menu.X.A.Y.emote == "WAVE" and ns.
 local preWhisper = ns.CopyMenu(shippedDefaults)
 preWhisper.X.A.X.variants, preWhisper.X.A.Y.variants = nil, nil
 PADChatDB = { menu = preWhisper, compact = false, version = 5 }; Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 8 and ns.DB.menu.X.A.Y.variants.WHISPER.text == "Thanks for the group!")
+assert(ns.DB.version == 9 and ns.DB.menu.X.A.Y.variants.WHISPER.text == "Thanks for the group!")
 assert(ns.DB.menu.X.A.X.variants.WHISPER.text == "Farewell" and ns.DB.menu.X.A.X.variants.WHISPER.emote == nil)
 assert(ns.DB.menu.X.A.Y.variants ~= shippedDefaults.X.A.Y.variants)
 local editedWave = ns.CopyMenu(shippedDefaults)
@@ -759,7 +773,7 @@ PADChatDB = { menu = editedWave, compact = false, version = 5 }; Event("ADDON_LO
 assert(ns.DB.menu.X.A.X.variants == nil and ns.DB.menu.X.A.Y.variants == nil)
 -- Saves from before the LFG tab gain its options, even in a removed slot.
 local preLFG = ns.CopyMenu(shippedDefaults)
-for _, key in ipairs(ns.CHOICES) do preLFG[key].variants.LFG = nil end
+for key in pairs(ns.DefaultMenu) do preLFG[key].variants.LFG = nil end
 preLFG.Y = nil
 PADChatDB = { menu = preLFG, compact = false, version = 7 }; Event("ADDON_LOADED", "PADChat")
 local lfgMenu = ns.ResolveNode(ns.GetMenu(), "LFG")
@@ -771,7 +785,7 @@ assert(ns.ResolveNode(ns.GetMenu(), "WHISPER").X.A.Y.text == "Thanks for the gro
 assert(ns.ResolveNode(ns.GetMenu(), "WHISPER").X.A.A.text == "Hello", "Whisper inherits Say, not Group")
 members = { { "Erin", true } }; Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A")
-assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Thanks for the group")
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Thanks for the group,XA(LT+X) - Have a good one,XA(RT+X) - Gotta go")
 local emotesBefore = #emotes
 Pad("Y"); assert(sent[1] == "Thanks for the group!" and sent[2] == "WHISPER" and sent[3] == "Erin" and #emotes == emotesBefore)
 Released()
@@ -844,7 +858,7 @@ versionThree.X.variants.RAID.A.text = "Custom defense."
 versionThree.Y.variants.GROUP = nil
 PADChatDB = { menu = versionThree, compact = false, version = 3 }
 Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 8 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
+assert(ns.DB.version == 9 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
 assert(ns.DB.menu.X.variants.RAID.A.text == "Custom defense." and ns.DB.menu.X.variants.RAID.battlegrounds == nil)
 assert(ns.DB.menu.Y.variants.GROUP == nil)
 ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text = "Custom flag call!"
@@ -867,4 +881,102 @@ minimapButton.scripts.OnDragStop(minimapButton)
 assert(ns.DB.minimapAngle == 90 and minimapButton.scripts.OnUpdate == nil)
 assert(math.abs(minimapButton.point[4]) < 1e-9 and minimapButton.point[5] == 104)
 
-print("Editor checks passed: no slash commands, minimap button, Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, and combat snapshots.")
+-- LT, RT and LT+RT give each face button its own slot, held across levels.
+-- The restricted environment rejects this word, even in a comment.
+for _, frame in ipairs({ PADChatOpen, PADChatLT, PADChatRT }) do
+	assert(not frame.attributes._onclick:find("function"), "Snippets can't contain that word")
+end
+local function Trigger(name, down) RunSnippet(_G["PADChat" .. name], name, down) end
+local function LoadMenu(menu)
+	PADChatDB = { menu = menu, compact = false, version = 8 }; Event("ADDON_LOADED", "PADChat"); ns.MenuChanged()
+end
+local fullMenu = {}
+for _, key in ipairs(ns.CHOICES) do fullMenu[key] = { label = "Slot " .. key, text = "Sent " .. key } end
+LoadMenu(fullMenu); Group()
+assert(#ns.CHOICES == 12)
+Pad("LeftButton")
+assert(PADChatOpen.bindings.PADLTRIGGER == "LT" and PADChatOpen.bindings["ALT-CTRL-SHIFT-PADRTRIGGER"] == "RT")
+Pad("B"); Released()
+local slot = 0
+for _, held in ipairs({ {}, { "LT" }, { "RT" }, { "LT", "RT" } }) do
+	for _, face in ipairs({ "A", "X", "Y" }) do
+		slot = slot + 1
+		Pad("LeftButton")
+		for _, name in ipairs(held) do Trigger(name, true) end
+		Pad(face)
+		for _, name in ipairs(held) do Trigger(name, false) end
+		assert(sent[1] == "Sent " .. ns.CHOICES[slot], "Each combination is its own slot"); Released()
+	end
+end
+
+LoadMenu({ A = { label = "Plain slot", text = "Sent A" },
+	C = { label = "Trigger group", A = { label = "Plain", text = "Inner plain" }, C = { label = "Held", text = "Inner held" } } })
+Pad("LeftButton")
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "A - Plain slot,(LT+A)A - Plain,(LT+A)(LT+A) - Held", "Chords are bracketed in paths")
+Trigger("LT", true); Pad("A"); assert(PADChatOpen:GetAttribute("path") == "C", "A chord can open a category")
+Pad("A"); assert(sent[1] == "Inner held", "A held trigger applies at every level"); Released()
+Trigger("LT", false)
+Pad("LeftButton"); Trigger("LT", true); Pad("A"); Trigger("LT", false); Pad("A")
+assert(sent[1] == "Inner plain", "Releasing the trigger goes back to plain"); Released()
+Pad("LeftButton"); Trigger("LT", true); Pad("B"); Released()
+Pad("LeftButton"); assert(PADChatOpen:GetAttribute("heldLT") == nil, "A release lost while closed can't stick")
+Pad("A"); assert(sent[1] == "Sent A"); Released()
+
+-- Compact view lists only the chord slots in use; the editor offers all of them.
+Click(Button("Compact: Off")); Pad("LeftButton")
+local function RowShown(text, inMenu)
+	for _, o in ipairs(objects) do
+		if o.kind == "Text" and o.text == text and (o.parent.parent == PADChatMenu) == inMenu and o:IsVisible() then return true end
+	end
+	return false
+end
+assert(RowShown("LT+ Trigger group", true) and not RowShown("RT+ —", true), "Empty chord rows stay hidden")
+Pad("B"); Released(); Click(Button("Compact: On"))
+assert(RowShown("LT+ Trigger group", false) and RowShown("LT+RT+ + Add option", false), "The editor shows every slot")
+
+-- Saves hold only what the player changed. A complete pre-9 save is cleaned up,
+-- keeping its edits and removals. Very old stock saves still count as stock.
+ns.DefaultMenu = shippedDefaults
+assert(shippedDefaults.A.F.text == "One moment, please." and shippedDefaults.A.G.text == "I cannot right now.")
+assert(shippedDefaults.Y.variants.GROUP.C.text == "On my way!" and shippedDefaults.A.I == nil, "LT+RT is left to players")
+local preTrigger = ns.CopyMenu(shippedDefaults); StripPresets(preTrigger)
+preTrigger.A.E = { label = "Mine", text = "Mine" }; preTrigger.A.X = nil
+preTrigger.Y = { label = "Now a message", text = "Mine too" }
+PADChatDB = { menu = preTrigger, compact = false, version = 8 }; Event("ADDON_LOADED", "PADChat")
+local menu = ns.DB.menu
+assert(ns.DB.version == 9 and menu.X.X.E.text == "Of course!")
+assert(menu.A.G.text == "I cannot right now." and menu.A.G ~= shippedDefaults.A.G, "Unassigned trigger slots use the default")
+assert(menu.A.E.text == "Mine" and menu.A.X == nil and menu.Y.C == nil, "Edits, removals and changed kinds stay")
+assert(menu.X.variants.GROUP.X.F.text == "Not ready yet.")
+
+-- On disk: no unedited defaults, and removals are explicit.
+menu.X.A.label = "My greetings"; menu.X.variants.RAID = nil
+ns.ToggleEditor(); ns.ToggleEditor(); Click(Button("Say"))
+for _, path in ipairs({ "X", "XA" }) do
+	if not Find(function(o) return o.path == path .. "A" and o.selection ~= nil end, true) then Expand(path) end
+end
+Select("XAG"); Click(Button("Remove"))
+Event("PLAYER_LOGOUT")
+assert(menu.A.G == nil and menu.A.A == nil and menu.X.X == nil and menu.X.variants.GROUP == nil, "Unedited defaults aren't saved")
+assert(menu.A.E.text == "Mine" and menu.A.X.empty and menu.X.A.G.empty and menu.X.A.A == nil and menu.Y.text == "Mine too", "Only player changes are saved")
+assert(menu.X.A.label == "My greetings" and menu.X.variants.RAID.empty, "Renames and restored inheritance are saved")
+
+-- Back in play the menu is complete again, and Messages.lua stays the source.
+local removedPreset, rewordedPreset = shippedDefaults.A.F, shippedDefaults.A.C
+shippedDefaults.A.F, shippedDefaults.A.C = nil, { label = "Reworded", text = "Reworded!" }
+Event("ADDON_LOADED", "PADChat")
+assert(menu.A.F == nil and menu.A.C.text == "Reworded!" and menu.A.G.text == "I cannot right now.", "Defaults come from Messages.lua")
+assert(menu.A.A.text == "Yes!" and menu.A.E.text == "Mine" and menu.A.X == nil and menu.X.A.G == nil, "Edits and removals survive a reload")
+assert(menu.X.A.label == "My greetings" and menu.X.A.A.text == "Hello", "A renamed category keeps its default options")
+assert(menu.X.variants.RAID == nil and menu.X.variants.GROUP.label == "Readiness", "Restored inheritance survives a reload")
+shippedDefaults.A.F, shippedDefaults.A.C = removedPreset, rewordedPreset
+Event("PLAYER_LOGOUT"); local onDisk = ns.CopyMenu(menu)
+Event("ADDON_LOADED", "PADChat"); Event("PLAYER_LOGOUT")
+assert(menu.A.X.empty and menu.A.E.text == onDisk.A.E.text and menu.X.A.G.empty and menu.A.G == nil, "Repeated reloads don't drift")
+Event("ADDON_LOADED", "PADChat")
+local oldestStock = ns.CopyMenu(shippedDefaults); StripPresets(oldestStock)
+for key in pairs(shippedDefaults) do oldestStock[key].variants = nil end
+PADChatDB = { menu = oldestStock, compact = false, version = 2 }; Event("ADDON_LOADED", "PADChat")
+assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}" and ns.DB.menu.A.G.text == "I cannot right now.")
+
+print("Editor checks passed: no slash commands, minimap button, Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, combat snapshots, and trigger chords.")
